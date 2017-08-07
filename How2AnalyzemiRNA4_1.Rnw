@@ -1,0 +1,307 @@
+\documentclass{article}
+\usepackage{underscore}
+\usepackage[utf8]{inputenc}
+\usepackage{longtable}
+\usepackage[margin=1in]{geometry}
+\usepackage[english]{babel}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage[table,xcdraw]{xcolor}
+\usepackage{fancyvrb}
+\usepackage{lscape}
+\usepackage{anysize}
+\usepackage{fancyhdr}
+\usepackage{color}
+
+\lhead{\includegraphics[width=.28\textwidth]{./images/UEBblanc.jpg}}
+\rhead{\leftmark}
+
+\pagestyle{fancy}
+
+
+\marginsize{3.0cm}{3.5cm}{2.5cm}{2.5cm}
+\renewcommand{\baselinestretch}{1.3}
+\renewcommand*\footnoterule{}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=violet
+}
+
+\begin{document}
+
+\title{\begin{figure}[htbp]
+       \centering
+       \includegraphics[width=60mm]{images/UEBblanc.jpg}
+       \includegraphics[width=35mm]{images/IR.jpg}
+       \end{figure}
+       \vspace{1cm}
+       An Example of Differential miRNA Expression \\
+       Analysis Using R and Bioconductor Packages\\
+}
+\\
+\\
+\author{Ricardo Gonzalo  and Alex S\`{a}nchez \\ 
+        Unitat d'Estad\'{i}stica i Bioinform\`{a}tica \\
+        Vall d'Hebron Institut de Recerca (VHIR)} \\
+
+\bibliographystyle{plain}
+
+\hyperbaseurl{.}
+
+\setkeys{Gin}{width=0.7\textwidth}
+\maketitle
+
+\begin{document}
+
+\section{Introduction and Study Organization}
+This document aims to explain how to analyze data from miRNA 4.1 arrays from Affymetrix manufacturer.
+
+The analysis has been performed following the usual “pipeline” for microarray data
+analysis. Roughly speaking each of the items below corresponds to one section in the analysis report:
+\begin{enumerate}
+  \item Quality control: Do we have good data? Should any slides be rejected?
+  \item Data preprocess: Summarization, filtering and normalization.
+  \item Selection of genes differentially expressed for each set of conditions.
+\end{enumerate}
+
+The statistic analysis has been performed using the statistical language  ``R''( \textttt{\Sexpr{R.Version()$versi}, Copyright (C) 2015 The R Foundation for Statistical Computing} ), and the libraries developed for the microarray analysis in the Bioconductor Project (\url{www.bioconductor.org}). More details about the methods used in these analysis could be  found in .
+
+First of all it is necessary to set the folders where the data is and where the results will be saved:
+<<setDirs>>=
+mainDir <-getwd()
+workingDir <- mainDir
+dataDir <-file.path(mainDir, "data")
+resultsDir <- file.path(workingDir, "results")
+imagesDir<-file.path(mainDir,"images")
+@
+
+<<options,echo=FALSE>>=
+require(knitr)
+opts_chunk$set(fig.path = imagesDir, echo=TRUE, message=FALSE,warnings = FALSE )
+options(warn=-1)
+@
+
+We have to load the necessary pacakges for this analysis:
+<<loadpackages, results='hide',message=FALSE>>=
+library(xtable)
+library(Biobase)
+library(oligo)
+library(arrayQualityMetrics)
+library(devtools)
+library(ggplot2)
+library(ggrepel)
+library(pd.mirna.4.1)
+@
+
+It is important to remark that nowadays (at least on 07/08/2017) no package (platform design) for miRNA_4.1 arrays exists on Bioconductor web page. Therefore, it is necessary to build your own package following the instructions kindly posted at \url{https://support.bioconductor.org/p/96882/}. Briefly, it could something like:
+
+<<BuildPackage,eval=FALSE>>=
+pgfFile <- "miRNA-4_1-st-v1.pgf"
+clfFile <- "miRNA-4_1.clf"
+csvAnnoFile=csvAnno
+ 
+pkg <- new("AffyMiRNAPDInfoPkgSeed",
+             version="0.1",
+             author="RGS", email="ricardo.gonzalo@vhir.org",
+             biocViews="AnnotationData",
+             genomebuild="NCBI Build 35, May 2004",
+             pgfFile=pgfFile, clfFile=clfFile)
+makePdInfoPackage(pkg, destDir=".")
+ 
+library(devtools)
+build("pd.mirna.4.1")
+ 
+install("pd.mirna.4.1")
+@
+
+
+\section{Data for the analysis}
+Data for the analysis has been obtained from \url{https://www.thermofisher.com/order/catalog/product/902410}, and has been summarized in the \texttt{targets file}:
+
+
+<<phenoData1, results='asis'>>=
+targets <-read.table(file.path(dataDir,"targets.csv"), header = TRUE, sep = ";") 
+x.big<-xtable(targets,caption="Targets file showing samples and covariates")
+print(x.big,tabular.environment='longtable',floating=FALSE,size="small")
+@
+
+
+\section{Results}
+\subsection{Quality Control}
+Different types of quality controls (QC) have been performed in this analysis. It is important to do this QC before and after array normalization to check if all the arrays are suitable for normalization process, and check if normalized data is appropriated for differential expression analysis.
+Besides, a comprehensive report and some more figures of quality control,  are provided for the raw data \texttt{(QCDir.raw/index.html)} and for the normalized data \texttt{(QCDir.norm/index.html)} to help the user to understand whether a particular array can be considered as an outlier.
+
+First of all it is necessary to read the CEL files of the experiment:
+<<readcels, results='hide'>>=
+celFiles<-list.celfiles(dataDir,full.names=TRUE)
+rawData<-read.celfiles(celFiles)
+@
+
+Some settings for the plots are useful:
+<<preajustes, results='hide'>>=
+colores <- as.character(targets$Color)
+grupos <- targets$Group
+sampleNames <-targets$ShortName
+@ 
+
+Next figure  shows a boxplot representing summaries of the signal intensity distributions of the arrays. Typically, one expects the boxes to have similar positions and widths. If the distribution of an array is very different from the others, this may indicate a problem.
+  
+<<boxplot,message=FALSE, fig.height=4,fig.width=4, fig.align='center'>>=
+boxplot(rawData, cex.axis=0.6, col=colores,  las=2, names=sampleNames, main="Boxplot for arrays intensity: Raw data")
+@ 
+  
+Next figure shows a scatterplot of the arrays along the first two principal components. Principal components Analysis (PCA) is a dimension reduction technique that may be used to represent the values of an expression matrix in two (or three) dimensions. The plot is constructed in such a way that “similar” arrays should appear together in the plot, so that if a sample appears near others that are not considered similar it can be suspected the presence of some kind of technical problems such as batch effects, mislabelling of samples, etc.
+
+<<plotPCA,message=FALSE,fig.align='center',fig.height=5,fig.width=5>>=
+source("https://raw.githubusercontent.com/uebvhir/UEB_PCA/master/UEB_PCA.R")
+plotPCA2(exprs(rawData),labels =sampleNames, factor=grupos,title="Tissue",scale = TRUE )
+@
+  
+
+Once all the analyses have been performed the different outlier–detection approaches are
+compared in order to decide whether or not an array should be removed. Usually only arrays that are called outliers by more than one criteria are considered to rule out, although this depends on every specific study. 
+
+\subsection{Normalization}
+In order to make the data comparable as well as to remove technical biases the arrays have been preprocessed using the RMA method (Irizarry, 2003 and Gentleman, 2005).
+
+<<normalization.rma>>=
+eset_rma <- rma(rawData)
+@
+
+The PCA is performed again with the normalized data.
+
+<<plotPCA2Dpdfnorm,fig.align='center',fig.height=5,fig.width=5>>=
+plotPCA2(exprs(eset_rma),labels =sampleNames, factor=grupos,title="Grupo",scale = FALSE )
+@
+
+Some other Quality checks can be performed:
+<<distAnalisis2, fig.align='center',fig.height=5,fig.width=5>>=
+manDist <-  dist(t(exprs(eset_rma))) 
+clust.euclid.average <- hclust(dist(t(exprs(eset_rma))),method="average")
+
+heatmap (as.matrix(manDist),  col=heat.colors(16))  
+plot(clust.euclid.average, labels=sampleNames, 
+     main="Hierarchical clustering of samples (normalized data",  hang=-1)
+@
+
+<<arrayQuality2,  warning=FALSE>>=
+arrayQualityMetrics(eset_rma, outdir = file.path(resultsDir, "QCDir.Norm"), 
+                   force=TRUE)
+@
+
+It could be useful to save the normalized data in a csv file:
+<<writeNormalized>>=
+write.csv2(exprs(eset_rma), file.path(resultsDir, "Normalized.csv"),row.names = TRUE)
+@ 
+
+\subsection{Data filtering}
+\subsection{Filtering of the Data}
+Usually, in order to increase statistical power and reduce unnecessary noise it is necesary to remove some genes. In this array (\texttt{GeneChip miRNA 4.1 array}), a lot of species, apart from \textit{Homo sapiens}, are included. This study is focused on human miRNAs, therefore, the rest of the species have to be removed from the data.
+<<loadanota>>=
+#Anotacions file could be downloaded from 
+#Thermofisher web page (https://www.thermofisher.com/order/catalog/product/902410)
+anotacions <- read.csv(file.path(dataDir,"miRNA-4_1-st-v1.annotations.20160922.mod.csv"),
+                       sep=";",header=TRUE)
+#add Probe set name as rownames
+rownames(anotacions) <- anotacions[,2]
+anotacions <- anotacions[,-2]
+dim(anotacions)
+#select the human miRNA
+Hanotacions <- anotacions[which(anotacions$Species.Scientific.Name == "Homo sapiens"),]
+dim(Hanotacions)
+#save the human anotations in a file
+write.csv2(Hanotacions,file.path(resultsDir,"Anotations.miRNA.human.csv"),sep=";")
+
+#filter eset_rma to have only the human miRNA
+head(exprs(eset_rma))
+eset <- data.frame(exprs(eset_rma))
+data <- merge(eset, Hanotacions, by=0)
+head(data)
+dim(data)
+rownames(data) <- data[,1]
+colnames(data)
+data <- data[,-c(1,10:22)]
+@
+
+After removing miRNA from other species, the data to be included in the analysis is a list of \textbf{6.631 probes} (before removing the other species the length of the data was 36.353 probes). 
+
+\subsection{Selection of Differentially Expressed Genes}
+The goal of the study is to find differentially expressed miRNAs between the \texttt{Brain} and \texttt{Lung} tissues.
+
+To achieve this main objective specific comparison has been performed:
+\begin{itemize}
+\item Effect of \textit{Tissue} condition:
+  \begin{enumerate}
+    \item Brain vs Lung = Brain - Lung
+  \end{enumerate}
+\end{itemize}
+
+\\
+The analysis to select differentially expressed genes has been
+based on adjusting a linear model with empirical bayes moderation of the variance. This is a technique similar to ANOVA specifically developed for microarray data
+analysis by Gordon K. Smyth in 2004 \cite{Smyth:2004}.
+\\
+Each comparison yields a list of genes sorted from most to least differentially expressed
+genes which is called generically a top table. The resulting top tables are presented in an csv file. Besides for each comparisons the corresponding Volcano Plot is provided in the \texttt{results} folder.
+\\
+First we make the contrast matrix:
+<<setContrasts>>=
+require(limma)
+grupo <- as.factor(targets$Group)
+design <- model.matrix( ~0 + grupo)
+dim(design)
+
+colnames(design) <- c( "Brain",  "Lung")
+ContrastMatrix <- makeContrasts(BrainvsLung = Brain - Lung, levels=design)
+print(ContrastMatrix)
+@
+
+Second, fit the model:
+<<linearmodelfit>>=
+fit <- lmFit(data, design)
+fit.main <- contrasts.fit(fit, ContrastMatrix)
+fit.main <- eBayes(fit.main)
+@
+
+Third, obtain the tobTable:
+<<topTables,message=FALSE>>=
+topTab <- topTable (fit.main, number=nrow(fit.main), coef="BrainvsLung", adjust="fdr")
+write.csv2(topTab,file.path(resultsDir,"topTabBrainvsLung.csv"),sep=";")
+@
+
+The results of the number of differentially expressed genes in each comparisons at different thresholds are shown in next table:
+
+<<numsgenechange>>=
+source("https://raw.githubusercontent.com/uebvhir/UEB_NumGenesChanged/master/UEB_NumGenesChangedFunction.R")
+BrainvsLung <- genesSelectable(topTab,0.01,0.05,0.25,0.01,0.05)
+numGenesChanged <- cbind.data.frame(BrainvsLung)
+write.csv2(numGenesChanged,file.path(resultsDir,"numGenesChanged.csv"),sep=";")
+@
+
+
+<<numgenetable,results='asis'>>=
+x.big2 <- xtable(numGenesChanged,caption="Number of DEG for different thresholds",label="tab:numgeneschanged")
+print(x.big2, tabular.environment = 'longtable', floating = FALSE,size="small")
+@
+
+\subparagraph{p-values adjustment}
+
+If one wishes to have a statistically grounded criteria, the selection of the differentially expressed genes should be based on adjusted p-values (less than 0.01) or $B$ statistic (greater than 0). If these criteria yield too few genes, the table \ref{tab:numgeneschanged} indicates how many genes will yield a less restrictive criteria such as calling those differentially expressed genes with, for instance, adjusted p-values less than 0.25 or unadjusted p-values smaller than 0.05.\\
+
+
+In next table the 10 more differentially expressed genes for the comparison can be found.
+
+<<topGenes, results='asis'>>=
+csvtable <- xtable(topTab[1:10,], caption="10 genes more differentially expressed")
+print(csvtable, tabular.environment='longtable', floating=FALSE, size="normal", 
+      include.rownames=TRUE)
+@
+
+A Volcano plot could be easy performed:
+
+<<volcano, fig.align='center',fig.height=5,fig.width=5>>=
+volcanoplot(fit.main, coef = 1, highlight = 10)
+@
+
+\end{document}
